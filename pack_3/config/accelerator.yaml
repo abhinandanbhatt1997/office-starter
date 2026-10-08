@@ -1,0 +1,37 @@
+accelerator_name: azure-ai-enterprise-accelerator
+version: 0.1.0
+owner: ai-engineering
+status: ACTIVE
+
+ci_cd_platform: azure-devops
+documentation_style: enterprise
+supported_agent_tools:
+  - claude-code
+  - codex
+  - cursor
+
+delivery_model:
+  release_strategy: r0-first
+  require_eval_report: true
+  require_runbook: true
+  require_known_limitations: true
+  require_release_note: true
+  require_handover_pack: true
+
+azure:
+  preferred_regions:
+    - westeurope
+    - northeurope
+  identity_model: managed-identity
+  secret_store: azure-key-vault
+  state_backend: azure-storage-account
+
+packs:
+  pack_0: governance
+  pack_1: preflight
+  pack_2: eval-research
+  pack_3: repo-skeleton
+  pack_4: ai-agent-context
+  pack_5: cicd-iac
+  pack_6: enterprise-documentation
+  pack_7: operations-handover-protection

@@ -1,0 +1,9 @@
+steps:
+  - bash: |
+      set -euo pipefail
+
+      python3 --version
+
+      echo "Compiling Python tools as a basic syntax check."
+      python3 -m compileall tools
+    displayName: Python syntax check

@@ -1,0 +1,16 @@
+# Local Azure preflight configuration and generated reports
+pack_1/config/preflight.env
+pack_1/reports/preflight/
+
+# Terraform local working data and state (never commit state or plans)
+**/.terraform/**
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Local variable files may contain environment-specific values or secrets
+*.tfvars
+*.tfvars.json
+!*.tfvars.example

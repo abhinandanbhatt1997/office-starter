@@ -1,0 +1,43 @@
+project_name: "{{PROJECT_NAME}}"
+project_id: ""
+owner: ""
+business_sponsor: ""
+description: ""
+status: DRAFT
+data_classification: INTERNAL
+
+region: westeurope
+
+environments:
+  dev:
+    subscription_id: ""
+    resource_group: ""
+    ado_environment: dev
+  stage:
+    subscription_id: ""
+    resource_group: ""
+    ado_environment: stage
+  prod:
+    subscription_id: ""
+    resource_group: ""
+    ado_environment: prod
+
+ai:
+  provider: azure-openai
+  model: ""
+  deployment: ""
+  content_filter: default
+
+observability:
+  log_analytics_workspace: ""
+  application_insights: ""
+
+compliance:
+  data_residency: EU
+  pii: false
+  dpia_required: true
+
+tags:
+  cost_center: ""
+  service_owner: ""
+  environment: ""

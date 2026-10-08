@@ -1,0 +1,33 @@
+{
+  "eval_name": "sample-smoke-eval",
+  "description": "Sample evaluation using synthetic accelerator data.",
+  "owner": "ai-engineering",
+  "dataset_path": "eval/datasets/sample/basic_cases.jsonl",
+  "predictions_path": "eval/datasets/sample/sample_predictions.jsonl",
+  "report_path": "eval/reports/sample-smoke-eval.md",
+  "metrics": [
+    "exact_match_rate",
+    "success_rate",
+    "error_rate",
+    "average_latency_ms"
+  ],
+  "thresholds": {
+    "exact_match_rate": {
+      "min": 0.8
+    },
+    "success_rate": {
+      "min": 0.95
+    },
+    "error_rate": {
+      "max": 0.02
+    },
+    "average_latency_ms": {
+      "max": 3000
+    }
+  },
+  "tags": [
+    "sample",
+    "smoke",
+    "accelerator"
+  ]
+}

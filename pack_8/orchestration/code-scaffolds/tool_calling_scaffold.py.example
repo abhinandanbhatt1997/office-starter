@@ -1,0 +1,247 @@
+"""
+Tool Calling Scaffold
+Pattern: ORCH-PAT-004 (Tool Calling)
+
+This scaffold demonstrates how to register and execute tools
+that an LLM agent can call.
+"""
+
+import os
+import json
+import logging
+from typing import Dict, Any, Callable, Optional
+from dataclasses import dataclass
+
+from azure.identity import DefaultAzureCredential
+from azure.ai.inference import ChatCompletionsClient
+from azure.ai.inference.models import (
+    SystemMessage,
+    UserMessage,
+    ToolCall,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Tool Definition
+# ---------------------------------------------------------------------------
+@dataclass
+class ToolDefinition:
+    name: str
+    description: str
+    parameters: Dict[str, Any]  # JSON Schema
+    handler: Callable
+    timeout_ms: int = 30000
+    max_retries: int = 2
+
+
+class ToolRegistry:
+    """Registry for managing agent tools."""
+
+    def __init__(self):
+        self._tools: Dict[str, ToolDefinition] = {}
+
+    def register(self, tool: ToolDefinition):
+        """Register a tool."""
+        if tool.name in self._tools:
+            raise ValueError(f"Tool '{tool.name}' is already registered")
+        self._tools[tool.name] = tool
+        logger.info(f"Registered tool: {tool.name}")
+
+    def get(self, name: str) -> Optional[ToolDefinition]:
+        """Get a tool by name."""
+        return self._tools.get(name)
+
+    def get_openai_tools(self) -> list:
+        """Get tool definitions in OpenAI function calling format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for tool in self._tools.values()
+        ]
+
+    def execute(self, name: str, arguments: Dict[str, Any]) -> str:
+        """Execute a tool by name."""
+        tool = self._tools.get(name)
+        if not tool:
+            return json.dumps({"error": f"Unknown tool: {name}"})
+
+        try:
+            result = tool.handler(**arguments)
+            return json.dumps(result) if not isinstance(result, str) else result
+        except Exception as e:
+            logger.error(f"Tool '{name}' execution failed: {e}")
+            return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# Example Tools
+# ---------------------------------------------------------------------------
+def query_database(sql_query: str, timeout_seconds: int = 30) -> Dict[str, Any]:
+    """
+    Example tool: Execute a read-only SQL query.
+    
+    Replace this with your actual database query implementation.
+    Use Managed Identity for authentication.
+    """
+    # TODO: Implement your actual database query here
+    # Example:
+    # - Use Managed Identity to authenticate
+    # - Validate the SQL query (prevent injection)
+    # - Execute with timeout
+    # - Return results
+    
+    logger.info(f"Executing SQL query: {sql_query[:100]}...")
+    
+    # Placeholder response
+    return {
+        "results": [
+            {"column1": "value1", "column2": "value2"},
+        ],
+        "row_count": 1,
+    }
+
+
+def get_current_date() -> str:
+    """Example tool: Get the current date."""
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Tool-Enabled Agent
+# ---------------------------------------------------------------------------
+class ToolCallingAgent:
+    """An agent that can call registered tools."""
+
+    def __init__(self, system_prompt: str, tool_registry: ToolRegistry):
+        self.client = self._create_client()
+        self.system_prompt = system_prompt
+        self.tools = tool_registry
+        self.model = os.environ.get("AGENT_MODEL", "gpt-4o")
+
+    def _create_client(self) -> ChatCompletionsClient:
+        credential = DefaultAzureCredential()
+        return ChatCompletionsClient(
+            endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+            credential=credential,
+            api_version="2024-06-01",
+        )
+
+    def chat(
+        self,
+        user_message: str,
+        max_tool_iterations: int = 5,
+    ) -> str:
+        """
+        Process a user message, calling tools as needed.
+        
+        Args:
+            user_message: The user's input
+            max_tool_iterations: Maximum number of tool call loops
+            
+        Returns:
+            The final response text
+        """
+        messages = [
+            SystemMessage(content=self.system_prompt),
+            UserMessage(content=user_message),
+        ]
+
+        for iteration in range(max_tool_iterations):
+            response = self.client.complete(
+                messages=messages,
+                model=self.model,
+                tools=self.tools.get_openai_tools(),
+            )
+
+            message = response.choices[0].message
+
+            # If no tool calls, return the final response
+            if not message.tool_calls:
+                return message.content
+
+            # Process tool calls
+            messages.append(message)  # Add assistant message with tool calls
+
+            for tool_call in message.tool_calls:
+                function_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+
+                logger.info(f"Calling tool: {function_name} with args: {arguments}")
+
+                # Execute the tool
+                result = self.tools.execute(function_name, arguments)
+
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result,
+                })
+
+        return "I was unable to complete your request within the allowed number of steps."
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Create tool registry
+    registry = ToolRegistry()
+
+    # Register tools
+    registry.register(ToolDefinition(
+        name="query_database",
+        description="Executes a read-only SQL query against the analytics database",
+        parameters={
+            "type": "object",
+            "properties": {
+                "sql_query": {
+                    "type": "string",
+                    "description": "The SQL query to execute",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Query timeout in seconds",
+                    "default": 30,
+                },
+            },
+            "required": ["sql_query"],
+        },
+        handler=query_database,
+        timeout_ms=30000,
+    ))
+
+    registry.register(ToolDefinition(
+        name="get_current_date",
+        description="Gets the current date",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+        handler=get_current_date,
+    ))
+
+    # Create agent
+    SYSTEM_PROMPT = """
+    You are a helpful assistant with access to tools.
+    Use the query_database tool to answer questions about data.
+    Use get_current_date when you need to know today's date.
+    """
+
+    agent = ToolCallingAgent(
+        system_prompt=SYSTEM_PROMPT,
+        tool_registry=registry,
+    )
+
+    # Example conversation
+    response = agent.chat("What is today's date?")
+    print(f"Response: {response}")

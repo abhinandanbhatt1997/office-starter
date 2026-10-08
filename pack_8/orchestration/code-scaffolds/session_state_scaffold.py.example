@@ -1,0 +1,269 @@
+"""
+Session State Scaffold
+Pattern: ORCH-PAT-008 (Session State)
+
+This scaffold demonstrates session state management with Azure Cosmos DB.
+This is the Azure equivalent of your AWS DynamoDB session state pattern.
+"""
+
+import os
+import json
+import logging
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timedelta
+
+from azure.identity import DefaultAzureCredential
+from azure.cosmos import CosmosClient, PartitionKey
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+COSMOS_ENDPOINT = os.environ.get("COSMOS_ENDPOINT")
+COSMOS_DATABASE = os.environ.get("COSMOS_DATABASE", "agent-sessions")
+COSMOS_CONTAINER = os.environ.get("COSMOS_CONTAINER", "sessions")
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "86400"))  # 24 hours
+
+
+# ---------------------------------------------------------------------------
+# Session State Manager
+# ---------------------------------------------------------------------------
+class SessionStateManager:
+    """
+    Manages conversation session state in Azure Cosmos DB.
+    
+    Adapt this for your specific use case:
+    - Customize the session schema
+    - Add your context window management strategy
+    - Add PII masking before storage
+    """
+
+    def __init__(self):
+        self.credential = DefaultAzureCredential()
+        self.client = CosmosClient(
+            url=COSMOS_ENDPOINT,
+            credential=self.credential,
+        )
+        self._ensure_database_and_container()
+
+    def _ensure_database_and_container(self):
+        """Ensure the database and container exist."""
+        try:
+            database = self.client.get_database_client(COSMOS_DATABASE)
+        except CosmosResourceNotFoundError:
+            database = self.client.create_database(COSMOS_DATABASE)
+
+        try:
+            self.container = database.get_container_client(COSMOS_CONTAINER)
+        except CosmosResourceNotFoundError:
+            self.container = database.create_container(
+                id=COSMOS_CONTAINER,
+                partition_key=PartitionKey(path="/session_id"),
+                default_ttl=SESSION_TTL_SECONDS,
+            )
+
+    def create_session(
+        self,
+        session_id: str,
+        user_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a new session."""
+        session = {
+            "id": session_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "messages": [],
+            "metadata": metadata or {},
+            "total_tokens": 0,
+            "total_cost_usd": 0.0,
+            "turn_count": 0,
+            "ttl": SESSION_TTL_SECONDS,
+        }
+
+        self.container.create_item(session)
+        logger.info(f"Created session: {session_id}")
+        return session
+
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get a session by ID."""
+        try:
+            return self.container.read_item(
+                item=session_id,
+                partition_key=session_id,
+            )
+        except CosmosResourceNotFoundError:
+            return None
+
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        tokens: int = 0,
+        model: Optional[str] = None,
+        citations: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Add a message to the session."""
+        session = self.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+            "tokens": tokens,
+            "model": model,
+            "citations": citations or [],
+        }
+
+        session["messages"].append(message)
+        session["updated_at"] = datetime.utcnow().isoformat()
+        session["total_tokens"] += tokens
+        session["turn_count"] += 1 if role == "user" else 0
+
+        self.container.replace_item(
+            item=session_id,
+            body=session,
+        )
+
+        return session
+
+    def get_context_window(
+        self,
+        session_id: str,
+        max_messages: int = 20,
+        max_tokens: int = 8000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get the context window for LLM calls.
+        
+        Uses a sliding window strategy: returns the most recent messages
+        up to the specified limits.
+        
+        Adapt this to use summarization or other strategies as needed.
+        """
+        session = self.get_session(session_id)
+        if not session:
+            return []
+
+        messages = session["messages"]
+
+        # Sliding window: take last N messages
+        recent_messages = messages[-max_messages:]
+
+        # Token budget: truncate if needed
+        total_tokens = 0
+        context_messages = []
+
+        for message in reversed(recent_messages):
+            message_tokens = message.get("tokens", 0)
+            if total_tokens + message_tokens > max_tokens:
+                break
+            context_messages.insert(0, message)
+            total_tokens += message_tokens
+
+        return context_messages
+
+    def update_metadata(
+        self,
+        session_id: str,
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Update session metadata."""
+        session = self.get_session(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+
+        session["metadata"].update(metadata)
+        session["updated_at"] = datetime.utcnow().isoformat()
+
+        self.container.replace_item(
+            item=session_id,
+            body=session,
+        )
+
+        return session
+
+    def delete_session(self, session_id: str):
+        """Delete a session."""
+        try:
+            self.container.delete_item(
+                item=session_id,
+                partition_key=session_id,
+            )
+            logger.info(f"Deleted session: {session_id}")
+        except CosmosResourceNotFoundError:
+            pass
+
+    def list_user_sessions(
+        self,
+        user_id: str,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """List sessions for a user."""
+        query = """
+            SELECT * FROM c
+            WHERE c.user_id = @user_id
+            ORDER BY c.updated_at DESC
+            OFFSET 0 LIMIT @limit
+        """
+
+        return list(self.container.query_items(
+            query=query,
+            parameters=[
+                {"name": "@user_id", "value": user_id},
+                {"name": "@limit", "value": limit},
+            ],
+            enable_cross_partition_query=False,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    manager = SessionStateManager()
+
+    # Create a session
+    session = manager.create_session(
+        session_id="session-001",
+        user_id="user-123",
+        metadata={"agent_version": "v1.0.0"},
+    )
+    print(f"Created session: {session['session_id']}")
+
+    # Add messages
+    manager.add_message(
+        session_id="session-001",
+        role="user",
+        content="What is the capital of France?",
+        tokens=15,
+    )
+
+    manager.add_message(
+        session_id="session-001",
+        role="assistant",
+        content="The capital of France is Paris.",
+        tokens=12,
+        model="gpt-4o",
+        citations=["source-001"],
+    )
+
+    # Get context window
+    context = manager.get_context_window("session-001")
+    print(f"\nContext window: {len(context)} messages")
+    for msg in context:
+        print(f"  [{msg['role']}]: {msg['content']}")
+
+    # Get session info
+    session = manager.get_session("session-001")
+    print(f"\nSession stats:")
+    print(f"  Turn count: {session['turn_count']}")
+    print(f"  Total tokens: {session['total_tokens']}")

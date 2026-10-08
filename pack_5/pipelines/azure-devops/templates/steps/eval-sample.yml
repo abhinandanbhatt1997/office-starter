@@ -1,0 +1,7 @@
+steps:
+  - bash: |
+      set -euo pipefail
+
+      python3 tools/eval/run-eval.py \
+        --config eval/config/example.eval.json
+    displayName: Run sample evaluation

@@ -1,0 +1,23 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: applyTerraform
+    displayName: Apply Terraform
+    type: boolean
+    default: false
+
+variables:
+  - group: vg-accelerator-common
+
+jobs:
+  - template: pipelines/azure-devops/templates/jobs/deploy-job.yml
+    parameters:
+      environmentName: dev
+      workingDirectory: infra/environments/dev
+      serviceConnection: sc-azure-dev
+      backendResourceGroup: $(TERRAFORM_STATE_RESOURCE_GROUP)
+      backendStorageAccount: $(TERRAFORM_STATE_STORAGE_ACCOUNT)
+      backendContainer: $(TERRAFORM_STATE_CONTAINER)
+      backendKey: dev.terraform.tfstate
+      applyTerraform: ${{ parameters.applyTerraform }}

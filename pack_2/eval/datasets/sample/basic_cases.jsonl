@@ -1,0 +1,5 @@
+{"case_id":"basic-001","input":"What is the capital of France?","expected_output":"Paris","tags":["smoke","general"]}
+{"case_id":"basic-002","input":"Reply with the word ready only.","expected_output":"ready","tags":["smoke","instruction"]}
+{"case_id":"basic-003","input":"What is 2 + 2?","expected_output":"4","tags":["smoke","math"]}
+{"case_id":"basic-004","input":"What color is the sky on a clear day?","expected_output":"blue","tags":["smoke","general"]}
+{"case_id":"basic-005","input":"Reply with OK only.","expected_output":"OK","tags":["smoke","instruction"]}

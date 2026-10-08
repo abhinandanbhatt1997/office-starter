@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Environment/config
+.env
+config/preflight.env
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# Generated evaluation reports
+eval/reports/*
+!eval/reports/README.md
+
+# Generated pre-flight reports
+reports/preflight/*
+!reports/PREFLIGHT_REPORT_TEMPLATE.md
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

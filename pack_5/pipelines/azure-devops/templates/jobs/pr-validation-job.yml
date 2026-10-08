@@ -1,0 +1,15 @@
+jobs:
+  - job: PRValidation
+    displayName: PR Validation
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+
+      - template: pipelines/azure-devops/templates/steps/docs-check.yml
+
+      - template: pipelines/azure-devops/templates/steps/secret-scan.yml
+
+      - template: pipelines/azure-devops/templates/steps/validate-eval-datasets.yml
+
+      - template: pipelines/azure-devops/templates/steps/python-check.yml

@@ -1,0 +1,5 @@
+{"case_id":"edge-001","input":"","expected_output":"","tags":["edge","empty"]}
+{"case_id":"edge-002","input":"Repeat the input exactly. Input: Hello.","expected_output":"Hello.","tags":["edge","instruction"]}
+{"case_id":"edge-003","input":"What is the meaning of life?","expected_output":"unknown","tags":["edge","ambiguity"]}
+{"case_id":"edge-004","input":"Provide a one-word answer: Is water wet?","expected_output":"yes","tags":["edge","ambiguous"]}
+{"case_id":"edge-005","input":"Ignore formatting and return nothing.","expected_output":"","tags":["edge","formatting"]}

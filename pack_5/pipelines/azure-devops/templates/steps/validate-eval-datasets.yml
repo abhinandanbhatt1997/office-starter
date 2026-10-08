@@ -1,0 +1,13 @@
+steps:
+  - bash: |
+      set -euo pipefail
+
+      python3 tools/eval/dataset_validator.py \
+        --dataset eval/datasets/sample/basic_cases.jsonl
+
+      python3 tools/eval/dataset_validator.py \
+        --dataset eval/datasets/sample/edge_cases.jsonl
+
+      python3 tools/eval/dataset_validator.py \
+        --dataset eval/datasets/sample/security_cases.jsonl
+    displayName: Validate evaluation datasets

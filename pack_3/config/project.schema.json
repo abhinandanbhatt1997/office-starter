@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Project Instance Config",
+  "description": "Schema for project instance configuration used by the accelerator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "project_name",
+    "owner",
+    "description"
+  ],
+  "properties": {
+    "project_name": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "business_sponsor": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "ACTIVE",
+        "PAUSED",
+        "CLOSED"
+      ]
+    },
+    "data_classification": {
+      "type": "string",
+      "enum": [
+        "PUBLIC",
+        "INTERNAL",
+        "CONFIDENTIAL",
+        "RESTRICTED"
+      ]
+    },
+    "region": {
+      "type": "string"
+    },
+    "environments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "resource_group": {
+            "type": "string"
+          },
+          "ado_environment": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "deployment": {
+          "type": "string"
+        },
+        "content_filter": {
+          "type": "string"
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "log_analytics_workspace": {
+          "type": "string"
+        },
+        "application_insights": {
+          "type": "string"
+        }
+      }
+    },
+    "compliance": {
+      "type": "object",
+      "properties": {
+        "data_residency": {
+          "type": "string"
+        },
+        "pii": {
+          "type": "boolean"
+        },
+        "dpia_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

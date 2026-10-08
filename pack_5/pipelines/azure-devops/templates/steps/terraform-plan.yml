@@ -1,0 +1,48 @@
+parameters:
+  - name: workingDirectory
+    type: string
+    default: infra/environments/dev
+  - name: serviceConnection
+    type: string
+  - name: backendResourceGroup
+    type: string
+  - name: backendStorageAccount
+    type: string
+  - name: backendContainer
+    type: string
+  - name: backendKey
+    type: string
+
+steps:
+  - task: TerraformInstaller@1
+    displayName: Install Terraform
+    inputs:
+      terraformVersion: latest
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform init
+    inputs:
+      provider: azurerm
+      command: init
+      workingDirectory: ${{ parameters.workingDirectory }}
+      backendServiceArm: ${{ parameters.serviceConnection }}
+      backendAzureRmResourceGroupName: ${{ parameters.backendResourceGroup }}
+      backendAzureRmStorageAccountName: ${{ parameters.backendStorageAccount }}
+      backendAzureRmContainerName: ${{ parameters.backendContainer }}
+      backendAzureRmKey: ${{ parameters.backendKey }}
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform validate
+    inputs:
+      provider: azurerm
+      command: validate
+      workingDirectory: ${{ parameters.workingDirectory }}
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform plan
+    inputs:
+      provider: azurerm
+      command: plan
+      workingDirectory: ${{ parameters.workingDirectory }}
+      commandOptions: "-input=false"
+      environmentServiceNameAzureRM: ${{ parameters.serviceConnection }}

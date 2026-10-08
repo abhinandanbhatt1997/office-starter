@@ -1,0 +1,278 @@
+"""
+RAG Retrieval Scaffold
+Pattern: ORCH-PAT-003 (Retrieval-Augmented Generation)
+
+This scaffold demonstrates RAG with Azure AI Search.
+"""
+
+import os
+import json
+import logging
+from typing import List, Dict, Any, Optional
+
+from azure.identity import DefaultAzureCredential
+from azure.search.documents import SearchClient
+from azure.search.documents.models import VectorizedQuery
+from azure.ai.inference import ChatCompletionsClient, EmbeddingsClient
+from azure.ai.inference.models import SystemMessage, UserMessage
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
+AZURE_SEARCH_ENDPOINT = os.environ.get("AZURE_SEARCH_ENDPOINT")
+AZURE_SEARCH_INDEX = os.environ.get("AZURE_SEARCH_INDEX", "your-index-name")
+EMBEDDING_MODEL = "text-embedding-3-large"
+CHAT_MODEL = "gpt-4o"
+TOP_K_RESULTS = 5
+
+
+# ---------------------------------------------------------------------------
+# Client Factory
+# ---------------------------------------------------------------------------
+def create_search_client() -> SearchClient:
+    credential = DefaultAzureCredential()
+    return SearchClient(
+        endpoint=AZURE_SEARCH_ENDPOINT,
+        index_name=AZURE_SEARCH_INDEX,
+        credential=credential,
+    )
+
+
+def create_embeddings_client() -> EmbeddingsClient:
+    credential = DefaultAzureCredential()
+    return EmbeddingsClient(
+        endpoint=AZURE_OPENAI_ENDPOINT,
+        credential=credential,
+        api_version="2024-06-01",
+    )
+
+
+def create_chat_client() -> ChatCompletionsClient:
+    credential = DefaultAzureCredential()
+    return ChatCompletionsClient(
+        endpoint=AZURE_OPENAI_ENDPOINT,
+        credential=credential,
+        api_version="2024-06-01",
+    )
+
+
+# ---------------------------------------------------------------------------
+# RAG Pipeline
+# ---------------------------------------------------------------------------
+class RAGPipeline:
+    """
+    Retrieval-Augmented Generation pipeline.
+    
+    Adapt this for your specific use case:
+    - Customize the chunking strategy
+    - Customize the reranking logic
+    - Add citation tracking
+    - Add guardrails
+    """
+
+    def __init__(self):
+        self.search_client = create_search_client()
+        self.embeddings_client = create_embeddings_client()
+        self.chat_client = create_chat_client()
+
+    def generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding vector for a query."""
+        response = self.embeddings_client.complete(
+            input=text,
+            model=EMBEDDING_MODEL,
+        )
+        return response.data[0].embedding
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = TOP_K_RESULTS,
+        filter_expression: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant documents from Azure AI Search.
+        
+        Args:
+            query: The user's query
+            top_k: Number of results to return
+            filter_expression: Optional OData filter
+            
+        Returns:
+            List of retrieved documents with scores
+        """
+        # Generate query embedding
+        query_embedding = self.generate_embedding(query)
+
+        # Create vector query
+        vector_query = VectorizedQuery(
+            vector=query_embedding,
+            k=top_k,
+            fields="contentVector",  # Your vector field name
+        )
+
+        # Execute search
+        results = self.search_client.search(
+            search_text=query,
+            vector_queries=[vector_query],
+            select=["id", "title", "content", "source_url", "metadata"],
+            top=top_k,
+            filter=filter_expression,
+        )
+
+        # Format results
+        documents = []
+        for result in results:
+            documents.append({
+                "id": result.get("id"),
+                "title": result.get("title", ""),
+                "content": result.get("content", ""),
+                "source_url": result.get("source_url", ""),
+                "metadata": result.get("metadata", {}),
+                "score": result.get("@search.score", 0),
+            })
+
+        logger.info(f"Retrieved {len(documents)} documents for query: {query[:50]}...")
+        return documents
+
+    def build_context(self, documents: List[Dict[str, Any]]) -> str:
+        """Build context string from retrieved documents."""
+        if not documents:
+            return "No relevant documents found."
+
+        context_parts = []
+        for i, doc in enumerate(documents, 1):
+            context_parts.append(
+                f"[Source {i}: {doc['title']}]\n"
+                f"{doc['content']}\n"
+                f"URL: {doc['source_url']}"
+            )
+
+        return "\n\n---\n\n".join(context_parts)
+
+    def generate(
+        self,
+        query: str,
+        context: str,
+        system_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Generate a response using the retrieved context.
+        
+        Args:
+            query: The user's query
+            context: The retrieved context
+            system_prompt: The system prompt with instructions
+            
+        Returns:
+            Dictionary with response, citations, and token usage
+        """
+        user_prompt = f"""
+        Context from knowledge base:
+        {context}
+        
+        User Question: {query}
+        
+        Answer the user's question using ONLY the provided context.
+        If the context doesn't contain the answer, say so clearly.
+        Cite your sources using [Source N] notation.
+        """
+
+        response = self.chat_client.complete(
+            messages=[
+                SystemMessage(content=system_prompt),
+                UserMessage(content=user_prompt),
+            ],
+            model=CHAT_MODEL,
+        )
+
+        return {
+            "response": response.choices[0].message.content,
+            "tokens_input": response.usage.prompt_tokens,
+            "tokens_output": response.usage.completion_tokens,
+            "model_used": CHAT_MODEL,
+        }
+
+    def query(
+        self,
+        user_query: str,
+        system_prompt: str,
+        top_k: int = TOP_K_RESULTS,
+        filter_expression: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Full RAG pipeline: retrieve → build context → generate.
+        
+        Args:
+            user_query: The user's question
+            system_prompt: System prompt with instructions
+            top_k: Number of documents to retrieve
+            filter_expression: Optional filter for search
+            
+        Returns:
+            Complete RAG result with response, citations, and metadata
+        """
+        # Step 1: Retrieve
+        documents = self.retrieve(
+            query=user_query,
+            top_k=top_k,
+            filter_expression=filter_expression,
+        )
+
+        # Step 2: Build context
+        context = self.build_context(documents)
+
+        # Step 3: Generate
+        generation_result = self.generate(
+            query=user_query,
+            context=context,
+            system_prompt=system_prompt,
+        )
+
+        # Step 4: Compile citations
+        citations = [
+            {
+                "index": i + 1,
+                "title": doc["title"],
+                "url": doc["source_url"],
+                "score": doc["score"],
+            }
+            for i, doc in enumerate(documents)
+        ]
+
+        return {
+            "response": generation_result["response"],
+            "citations": citations,
+            "documents_retrieved": len(documents),
+            "tokens_input": generation_result["tokens_input"],
+            "tokens_output": generation_result["tokens_output"],
+            "model_used": generation_result["model_used"],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    SYSTEM_PROMPT = """
+    You are a helpful assistant that answers questions based on the 
+    provided context. Always cite your sources. If the context doesn't 
+    contain the answer, say so clearly.
+    """
+
+    rag = RAGPipeline()
+
+    result = rag.query(
+        user_query="What is our company's remote work policy?",
+        system_prompt=SYSTEM_PROMPT,
+        top_k=5,
+    )
+
+    print(f"Response: {result['response']}")
+    print(f"\nCitations: {len(result['citations'])}")
+    for citation in result["citations"]:
+        print(f"  [{citation['index']}] {citation['title']} (score: {citation['score']:.3f})")
+    print(f"\nTokens: {result['tokens_input']} in, {result['tokens_output']} out")

@@ -1,0 +1,5 @@
+{"case_id":"basic-001","actual_output":"Paris","latency_ms":140,"error":null}
+{"case_id":"basic-002","actual_output":"ready","latency_ms":95,"error":null}
+{"case_id":"basic-003","actual_output":"4","latency_ms":110,"error":null}
+{"case_id":"basic-004","actual_output":"blue","latency_ms":125,"error":null}
+{"case_id":"basic-005","actual_output":"OK","latency_ms":90,"error":null}

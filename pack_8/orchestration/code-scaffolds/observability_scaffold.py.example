@@ -1,0 +1,276 @@
+"""
+Observability Scaffold
+Pattern: Observability setup with OpenTelemetry and Application Insights
+
+This scaffold demonstrates how to set up comprehensive observability
+for your AI agent workloads.
+"""
+
+import os
+import time
+import logging
+import json
+from typing import Optional, Dict, Any
+from contextlib import contextmanager
+
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace, metrics
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
+from opentelemetry.trace import Status, StatusCode
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+APPLICATION_INSIGHTS_CONNECTION_STRING = os.environ.get(
+    "APPLICATION_INSIGHTS_CONNECTION_STRING"
+)
+SERVICE_NAME_VALUE = os.environ.get("SERVICE_NAME", "ai-agent-service")
+SERVICE_VERSION_VALUE = os.environ.get("SERVICE_VERSION", "1.0.0")
+DEPLOYMENT_ENVIRONMENT = os.environ.get("DEPLOYMENT_ENVIRONMENT", "development")
+
+
+# ---------------------------------------------------------------------------
+# Observability Setup
+# ---------------------------------------------------------------------------
+def setup_observability():
+    """
+    Configure OpenTelemetry with Azure Monitor.
+    
+    Call this once at application startup.
+    """
+    resource = Resource.create({
+        SERVICE_NAME: SERVICE_NAME_VALUE,
+        SERVICE_VERSION: SERVICE_VERSION_VALUE,
+        "deployment.environment": DEPLOYMENT_ENVIRONMENT,
+    })
+
+    configure_azure_monitor(
+        connection_string=APPLICATION_INSIGHTS_CONNECTION_STRING,
+        resource=resource,
+    )
+
+    logger.info("Observability configured successfully")
+
+
+# ---------------------------------------------------------------------------
+# Tracing
+# ---------------------------------------------------------------------------
+tracer = trace.get_tracer(__name__)
+
+
+@contextmanager
+def trace_agent_step(
+    step_name: str,
+    session_id: str = "unknown",
+    correlation_id: str = "unknown",
+    attributes: Optional[Dict[str, Any]] = None,
+):
+    """
+    Context manager for tracing an agent step.
+    
+    Usage:
+        with trace_agent_step("llm_call", session_id="abc"):
+            # Your code here
+            pass
+    """
+    with tracer.start_as_current_span(step_name) as span:
+        # Add standard attributes
+        span.set_attribute("ai.session_id", session_id)
+        span.set_attribute("ai.correlation_id", correlation_id)
+        span.set_attribute("ai.step_name", step_name)
+
+        # Add custom attributes
+        if attributes:
+            for key, value in attributes.items():
+                span.set_attribute(f"ai.{key}", value)
+
+        try:
+            yield span
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+meter = metrics.get_meter(__name__)
+
+# Counters
+token_counter = meter.create_counter(
+    name="ai.tokens.total",
+    description="Total tokens consumed",
+    unit="1",
+)
+
+request_counter = meter.create_counter(
+    name="ai.requests.total",
+    description="Total LLM requests",
+    unit="1",
+)
+
+error_counter = meter.create_counter(
+    name="ai.errors.total",
+    description="Total errors",
+    unit="1",
+)
+
+tool_call_counter = meter.create_counter(
+    name="ai.tool_calls.total",
+    description="Total tool invocations",
+    unit="1",
+)
+
+guardrail_block_counter = meter.create_counter(
+    name="ai.guardrail_blocks.total",
+    description="Total requests blocked by guardrails",
+    unit="1",
+)
+
+# Histograms
+latency_histogram = meter.create_histogram(
+    name="ai.request.duration",
+    description="LLM request duration in milliseconds",
+    unit="ms",
+)
+
+token_histogram = meter.create_histogram(
+    name="ai.tokens.per_request",
+    description="Tokens per request",
+    unit="1",
+)
+
+
+def track_llm_call(
+    model: str,
+    tokens_input: int,
+    tokens_output: int,
+    duration_ms: float,
+    session_id: str = "unknown",
+    correlation_id: str = "unknown",
+    success: bool = True,
+    error_type: Optional[str] = None,
+):
+    """Track metrics for an LLM call."""
+    attributes = {
+        "model": model,
+        "session_id": session_id,
+        "correlation_id": correlation_id,
+        "success": success,
+    }
+
+    if error_type:
+        attributes["error_type"] = error_type
+
+    # Track request count
+    request_counter.add(1, attributes)
+
+    # Track tokens
+    token_counter.add(tokens_input, {**attributes, "token_type": "input"})
+    token_counter.add(tokens_output, {**attributes, "token_type": "output"})
+
+    # Track latency
+    latency_histogram.record(duration_ms, attributes)
+
+    # Track tokens per request
+    total_tokens = tokens_input + tokens_output
+    token_histogram.record(total_tokens, attributes)
+
+    # Track errors
+    if not success:
+        error_counter.add(1, attributes)
+
+
+def track_tool_call(
+    tool_name: str,
+    duration_ms: float,
+    success: bool = True,
+    error_type: Optional[str] = None,
+):
+    """Track metrics for a tool call."""
+    attributes = {
+        "tool_name": tool_name,
+        "success": success,
+    }
+
+    if error_type:
+        attributes["error_type"] = error_type
+
+    tool_call_counter.add(1, attributes)
+    latency_histogram.record(duration_ms, {**attributes, "operation": "tool_call"})
+
+
+def track_guardrail_block(
+    block_type: str,
+    stage: str,  # "input" or "output"
+    session_id: str = "unknown",
+):
+    """Track metrics for guardrail blocks."""
+    attributes = {
+        "block_type": block_type,
+        "stage": stage,
+        "session_id": session_id,
+    }
+    guardrail_block_counter.add(1, attributes)
+
+
+# ---------------------------------------------------------------------------
+# Structured Logging
+# ---------------------------------------------------------------------------
+def log_agent_event(
+    event: str,
+    session_id: str = "unknown",
+    correlation_id: str = "unknown",
+    **kwargs,
+):
+    """Emit a structured JSON log event."""
+    log_entry = {
+        "event": event,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "session_id": session_id,
+        "correlation_id": correlation_id,
+        "service": SERVICE_NAME_VALUE,
+        "environment": DEPLOYMENT_ENVIRONMENT,
+        **kwargs,
+    }
+    logger.info(json.dumps(log_entry))
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Setup (call once at startup)
+    setup_observability()
+
+    # Example: Trace an agent step
+    with trace_agent_step("example_llm_call", session_id="demo-001"):
+        # Simulate LLM call
+        time.sleep(0.1)
+
+        # Track metrics
+        track_llm_call(
+            model="gpt-4o",
+            tokens_input=100,
+            tokens_output=50,
+            duration_ms=150.5,
+            session_id="demo-001",
+            correlation_id="corr-001",
+        )
+
+        # Log event
+        log_agent_event(
+            "llm_call_complete",
+            session_id="demo-001",
+            correlation_id="corr-001",
+            model="gpt-4o",
+            tokens=150,
+        )
+
+    print("Observability example complete. Check Application Insights for data.")

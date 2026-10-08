@@ -1,0 +1,345 @@
+"""
+Multi-Agent Pipeline Scaffold
+Pattern: ORCH-PAT-002 (Multi-Agent Pipeline)
+
+This scaffold demonstrates a sequential three-agent pipeline:
+- Agent 1: Planning / Analysis (uses stronger model)
+- Agent 2: Execution / Tool calling
+- Agent 3: Response formatting (uses faster model)
+
+This is the Azure equivalent of your AWS Bedrock AgentCore three-agent pattern.
+"""
+
+import os
+import time
+import logging
+import json
+import uuid
+from typing import Optional, Dict, Any
+from dataclasses import dataclass, field
+
+from azure.identity import DefaultAzureCredential
+from azure.ai.inference import ChatCompletionsClient
+from azure.ai.inference.models import (
+    SystemMessage,
+    UserMessage,
+    AssistantMessage,
+)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_VERSION = "2024-06-01"
+
+# Agent model assignments - adapt to your needs
+PLANNING_MODEL = "gpt-4o"        # Agent 1: Stronger model for planning
+EXECUTION_MODEL = "gpt-4o"       # Agent 2: Tool calling
+RESPONSE_MODEL = "gpt-4o-mini"   # Agent 3: Faster model for formatting
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data Structures
+# ---------------------------------------------------------------------------
+@dataclass
+class AgentStepResult:
+    agent_name: str
+    output: str
+    model_used: str
+    tokens_input: int
+    tokens_output: int
+    duration_ms: float
+    error: Optional[str] = None
+
+
+@dataclass
+class PipelineResult:
+    final_response: str
+    steps: list = field(default_factory=list)
+    total_tokens_input: int = 0
+    total_tokens_output: int = 0
+    total_duration_ms: float = 0.0
+    correlation_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Client Factory
+# ---------------------------------------------------------------------------
+def create_client() -> ChatCompletionsClient:
+    credential = DefaultAzureCredential()
+    return ChatCompletionsClient(
+        endpoint=AZURE_OPENAI_ENDPOINT,
+        credential=credential,
+        api_version=AZURE_OPENAI_API_VERSION,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Orchestrator
+# ---------------------------------------------------------------------------
+class MultiAgentPipeline:
+    """
+    Sequential multi-agent pipeline.
+    
+    Adapt this for your specific use case:
+    - Define your agent prompts
+    - Add your tools for Agent 2
+    - Add your session state management
+    - Add your guardrails
+    """
+
+    def __init__(
+        self,
+        planning_prompt: str,
+        execution_prompt: str,
+        response_prompt: str,
+    ):
+        self.client = create_client()
+        self.planning_prompt = planning_prompt
+        self.execution_prompt = execution_prompt
+        self.response_prompt = response_prompt
+
+    def _call_agent(
+        self,
+        agent_name: str,
+        system_prompt: str,
+        user_input: str,
+        model: str,
+        correlation_id: str,
+        timeout: int = 60,
+    ) -> AgentStepResult:
+        """Call a single agent and return the result."""
+        start_time = time.time()
+
+        try:
+            response = self.client.complete(
+                messages=[
+                    SystemMessage(content=system_prompt),
+                    UserMessage(content=user_input),
+                ],
+                model=model,
+                timeout=timeout,
+            )
+
+            duration_ms = (time.time() - start_time) * 1000
+
+            result = AgentStepResult(
+                agent_name=agent_name,
+                output=response.choices[0].message.content,
+                model_used=model,
+                tokens_input=response.usage.prompt_tokens,
+                tokens_output=response.usage.completion_tokens,
+                duration_ms=duration_ms,
+            )
+
+            logger.info(json.dumps({
+                "event": "agent_step_complete",
+                "agent": agent_name,
+                "correlation_id": correlation_id,
+                "duration_ms": round(duration_ms, 2),
+                "tokens_in": result.tokens_input,
+                "tokens_out": result.tokens_output,
+            }))
+
+            return result
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(json.dumps({
+                "event": "agent_step_error",
+                "agent": agent_name,
+                "correlation_id": correlation_id,
+                "error": str(e),
+                "duration_ms": round(duration_ms, 2),
+            }))
+
+            return AgentStepResult(
+                agent_name=agent_name,
+                output="",
+                model_used=model,
+                tokens_input=0,
+                tokens_output=0,
+                duration_ms=duration_ms,
+                error=str(e),
+            )
+
+    def execute(
+        self,
+        user_input: str,
+        session_id: str = "unknown",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> PipelineResult:
+        """
+        Execute the full three-agent pipeline.
+        
+        Args:
+            user_input: The user's request
+            session_id: Session identifier for tracking
+            context: Optional context from session state or RAG
+            
+        Returns:
+            PipelineResult with final response and step details
+        """
+        correlation_id = str(uuid.uuid4())
+        pipeline_start = time.time()
+        steps = []
+
+        logger.info(json.dumps({
+            "event": "pipeline_start",
+            "session_id": session_id,
+            "correlation_id": correlation_id,
+        }))
+
+        # -----------------------------------------------------------------
+        # Agent 1: Planning / Analysis
+        # -----------------------------------------------------------------
+        planning_input = f"""
+        User Request: {user_input}
+        
+        Context: {json.dumps(context) if context else "None"}
+        
+        Analyze this request and create a plan. Identify what data or 
+        actions are needed.
+        """
+
+        step1 = self._call_agent(
+            agent_name="planning_agent",
+            system_prompt=self.planning_prompt,
+            user_input=planning_input,
+            model=PLANNING_MODEL,
+            correlation_id=correlation_id,
+        )
+        steps.append(step1)
+
+        if step1.error:
+            return PipelineResult(
+                final_response="I encountered an error while analyzing your request. Please try again.",
+                steps=steps,
+                correlation_id=correlation_id,
+            )
+
+        # -----------------------------------------------------------------
+        # Agent 2: Execution / Tool Calling
+        # -----------------------------------------------------------------
+        execution_input = f"""
+        Plan from Agent 1:
+        {step1.output}
+        
+        Execute the necessary actions based on this plan.
+        """
+
+        step2 = self._call_agent(
+            agent_name="execution_agent",
+            system_prompt=self.execution_prompt,
+            user_input=execution_input,
+            model=EXECUTION_MODEL,
+            correlation_id=correlation_id,
+        )
+        steps.append(step2)
+
+        if step2.error:
+            return PipelineResult(
+                final_response="I encountered an error while processing your request. Please try again.",
+                steps=steps,
+                correlation_id=correlation_id,
+            )
+
+        # -----------------------------------------------------------------
+        # Agent 3: Response Formatting
+        # -----------------------------------------------------------------
+        response_input = f"""
+        Original User Request: {user_input}
+        
+        Analysis from Agent 1:
+        {step1.output}
+        
+        Results from Agent 2:
+        {step2.output}
+        
+        Format a clear, helpful response for the user based on these results.
+        """
+
+        step3 = self._call_agent(
+            agent_name="response_agent",
+            system_prompt=self.response_prompt,
+            user_input=response_input,
+            model=RESPONSE_MODEL,
+            correlation_id=correlation_id,
+        )
+        steps.append(step3)
+
+        if step3.error:
+            # Fallback: return Agent 2's output directly
+            return PipelineResult(
+                final_response=step2.output,
+                steps=steps,
+                total_tokens_input=sum(s.tokens_input for s in steps),
+                total_tokens_output=sum(s.tokens_output for s in steps),
+                total_duration_ms=(time.time() - pipeline_start) * 1000,
+                correlation_id=correlation_id,
+            )
+
+        # -----------------------------------------------------------------
+        # Compile Results
+        # -----------------------------------------------------------------
+        total_duration = (time.time() - pipeline_start) * 1000
+
+        result = PipelineResult(
+            final_response=step3.output,
+            steps=steps,
+            total_tokens_input=sum(s.tokens_input for s in steps),
+            total_tokens_output=sum(s.tokens_output for s in steps),
+            total_duration_ms=total_duration,
+            correlation_id=correlation_id,
+        )
+
+        logger.info(json.dumps({
+            "event": "pipeline_complete",
+            "session_id": session_id,
+            "correlation_id": correlation_id,
+            "total_duration_ms": round(total_duration, 2),
+            "total_tokens_in": result.total_tokens_input,
+            "total_tokens_out": result.total_tokens_output,
+            "steps_completed": len(steps),
+        }))
+
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    PLANNING_PROMPT = """
+    You are a planning agent. Analyze the user's request and create a 
+    step-by-step plan. Identify what data needs to be retrieved or 
+    what actions need to be taken.
+    """
+
+    EXECUTION_PROMPT = """
+    You are an execution agent. Given a plan, execute the necessary 
+    actions and return the results. Be precise and factual.
+    """
+
+    RESPONSE_PROMPT = """
+    You are a response agent. Take the analysis and execution results 
+    and format a clear, helpful response for the user. Be concise.
+    """
+
+    pipeline = MultiAgentPipeline(
+        planning_prompt=PLANNING_PROMPT,
+        execution_prompt=EXECUTION_PROMPT,
+        response_prompt=RESPONSE_PROMPT,
+    )
+
+    result = pipeline.execute(
+        user_input="What were our Q3 sales figures?",
+        session_id="demo-session-001",
+    )
+
+    print(f"\nFinal Response: {result.final_response}")
+    print(f"\nSteps: {len(result.steps)}")
+    print(f"Total Tokens: {result.total_tokens_input} in, {result.total_tokens_output} out")
+    print(f"Total Duration: {result.total_duration_ms:.2f}ms")

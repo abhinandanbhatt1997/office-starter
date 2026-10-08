@@ -1,0 +1,13 @@
+
+---
+
+# 3. Pipeline Step Templates
+
+## `pipelines/azure-devops/templates/steps/docs-check.yml`
+
+```yaml
+steps:
+  - bash: |
+      set -euo pipefail
+      ./scripts/checks/docs-check.sh
+    displayName: Run documentation check

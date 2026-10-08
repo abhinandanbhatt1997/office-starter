@@ -1,0 +1,21 @@
+parameters:
+  - name: workingDirectory
+    type: string
+    default: infra/environments/dev
+  - name: serviceConnection
+    type: string
+
+steps:
+  - task: TerraformInstaller@1
+    displayName: Install Terraform
+    inputs:
+      terraformVersion: latest
+
+  - task: TerraformTaskV4@4
+    displayName: Terraform apply
+    inputs:
+      provider: azurerm
+      command: apply
+      workingDirectory: ${{ parameters.workingDirectory }}
+      commandOptions: "-input=false -auto-approve"
+      environmentServiceNameAzureRM: ${{ parameters.serviceConnection }}

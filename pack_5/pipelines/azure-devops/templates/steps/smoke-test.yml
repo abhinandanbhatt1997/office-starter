@@ -1,0 +1,12 @@
+steps:
+  - bash: |
+      set -euo pipefail
+
+      echo "Run project smoke test here."
+      echo "Replace this step with a real smoke test before production release."
+      echo "Examples:"
+      echo "  - call deployed API health endpoint"
+      echo "  - run a synthetic AI request"
+      echo "  - validate infrastructure outputs"
+      echo "  - validate logs appear in Application Insights"
+    displayName: Smoke test placeholder

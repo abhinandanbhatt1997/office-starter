@@ -1,0 +1,49 @@
+parameters:
+  - name: environmentName
+    type: string
+    default: dev
+  - name: workingDirectory
+    type: string
+    default: infra/environments/dev
+  - name: serviceConnection
+    type: string
+  - name: backendResourceGroup
+    type: string
+  - name: backendStorageAccount
+    type: string
+  - name: backendContainer
+    type: string
+  - name: backendKey
+    type: string
+  - name: applyTerraform
+    type: boolean
+    default: false
+
+jobs:
+  - deployment: Deploy
+    displayName: Deploy ${{ parameters.environmentName }}
+    environment: ${{ parameters.environmentName }}
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+
+            - template: pipelines/azure-devops/templates/steps/terraform-plan.yml
+              parameters:
+                workingDirectory: ${{ parameters.workingDirectory }}
+                serviceConnection: ${{ parameters.serviceConnection }}
+                backendResourceGroup: $(TERRAFORM_STATE_RESOURCE_GROUP)
+                backendStorageAccount: $(TERRAFORM_STATE_STORAGE_ACCOUNT)
+                backendContainer: $(TERRAFORM_STATE_CONTAINER)
+                backendKey: ${{ parameters.backendKey }}
+
+            - ${{ if eq(parameters.applyTerraform, true) }}:
+              - template: pipelines/azure-devops/templates/steps/terraform-apply.yml
+                parameters:
+                  workingDirectory: ${{ parameters.workingDirectory }}
+                  serviceConnection: ${{ parameters.serviceConnection }}
+
+            - template: pipelines/azure-devops/templates/steps/smoke-test.yml

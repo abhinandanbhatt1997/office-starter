@@ -1,0 +1,217 @@
+"""
+Service Bus Burst Absorption Scaffold
+Pattern: ORCH-PAT-005 (Queue-Based Burst)
+
+This scaffold demonstrates queue-based burst absorption with Azure Service Bus.
+This is the Azure equivalent of your AWS SQS burst absorption pattern.
+"""
+
+import os
+import json
+import logging
+import time
+from typing import Callable, Optional
+
+from azure.identity import DefaultAzureCredential
+from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.servicebus.exceptions import OperationTimeoutError
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+SERVICE_BUS_NAMESPACE = os.environ.get("SERVICE_BUS_NAMESPACE")
+QUEUE_NAME = os.environ.get("SERVICE_BUS_QUEUE", "agent-requests")
+MAX_DELIVERY_COUNT = int(os.environ.get("MAX_DELIVERY_COUNT", "3"))
+
+
+# ---------------------------------------------------------------------------
+# Service Bus Manager
+# ---------------------------------------------------------------------------
+class ServiceBusManager:
+    """
+    Manages Service Bus queue operations for burst absorption.
+    
+    Adapt this for your specific use case:
+    - Customize message schema
+    - Add your processing logic
+    - Configure DLQ handling
+    """
+
+    def __init__(self, queue_name: str = QUEUE_NAME):
+        self.queue_name = queue_name
+        self.credential = DefaultAzureCredential()
+        self.client = ServiceBusClient(
+            fully_qualified_namespace=f"{SERVICE_BUS_NAMESPACE}.servicebus.windows.net",
+            credential=self.credential,
+        )
+
+    def send_message(
+        self,
+        body: dict,
+        session_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        scheduled_enqueue_time: Optional[time.struct_time] = None,
+    ):
+        """Send a message to the queue."""
+        message = ServiceBusMessage(
+            body=json.dumps(body),
+            content_type="application/json",
+            session_id=session_id,
+            correlation_id=correlation_id,
+        )
+
+        if scheduled_enqueue_time:
+            message.scheduled_enqueue_time_utc = scheduled_enqueue_time
+
+        with self.client:
+            sender = self.client.get_queue_sender(queue_name=self.queue_name)
+            sender.send_messages(message)
+
+        logger.info(f"Sent message to queue: {self.queue_name}")
+
+    def receive_messages(
+        self,
+        handler: Callable[[dict, ServiceBusMessage], bool],
+        max_wait_time: int = 5,
+        max_message_count: int = 10,
+    ):
+        """
+        Receive and process messages from the queue.
+        
+        Args:
+            handler: Function to process each message. 
+                     Return True to complete, False to abandon.
+            max_wait_time: Maximum time to wait for messages (seconds)
+            max_message_count: Maximum messages to receive per batch
+        """
+        with self.client:
+            receiver = self.client.get_queue_receiver(
+                queue_name=self.queue_name,
+                max_wait_time=max_wait_time,
+                max_message_count=max_message_count,
+            )
+
+            for message in receiver:
+                try:
+                    body = json.loads(str(message))
+                    correlation_id = message.correlation_id
+                    session_id = message.session_id
+
+                    logger.info(json.dumps({
+                        "event": "message_received",
+                        "queue": self.queue_name,
+                        "correlation_id": correlation_id,
+                        "session_id": session_id,
+                        "delivery_count": message.delivery_count,
+                    }))
+
+                    # Process the message
+                    success = handler(body, message)
+
+                    if success:
+                        receiver.complete_message(message)
+                        logger.info(f"Message completed: {correlation_id}")
+                    else:
+                        receiver.abandon_message(message)
+                        logger.warning(f"Message abandoned: {correlation_id}")
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid message format: {e}")
+                    receiver.dead_letter_message(
+                        message,
+                        reason="InvalidFormat",
+                        error_description=str(e),
+                    )
+
+                except Exception as e:
+                    logger.error(f"Message processing failed: {e}")
+                    # Abandon to allow retry (up to max_delivery_count)
+                    receiver.abandon_message(message)
+
+    def peek_dead_letter(
+        self,
+        max_message_count: int = 10,
+    ) -> list:
+        """Peek at messages in the Dead Letter Queue."""
+        with self.client:
+            receiver = self.client.get_queue_receiver(
+                queue_name=self.queue_name,
+                sub_queue="deadletter",
+                max_wait_time=5,
+                max_message_count=max_message_count,
+            )
+
+            messages = []
+            for message in receiver:
+                messages.append({
+                    "body": str(message),
+                    "correlation_id": message.correlation_id,
+                    "delivery_count": message.delivery_count,
+                    "dead_letter_reason": message.dead_letter_reason,
+                    "dead_letter_error_description": message.dead_letter_error_description,
+                })
+                # Note: In production, you'd want to process or move these
+                # rather than just peeking
+
+            return messages
+
+
+# ---------------------------------------------------------------------------
+# Example Message Handler
+# ---------------------------------------------------------------------------
+def process_agent_request(body: dict, message: ServiceBusMessage) -> bool:
+    """
+    Process an agent request from the queue.
+    
+    Replace this with your actual agent processing logic.
+    
+    Returns:
+        True if processing succeeded, False to retry
+    """
+    try:
+        user_input = body.get("user_input", "")
+        session_id = body.get("session_id", "unknown")
+
+        logger.info(f"Processing agent request for session: {session_id}")
+
+        # TODO: Call your agent pipeline here
+        # Example:
+        # result = pipeline.execute(user_input, session_id=session_id)
+        # Store result, notify user, etc.
+
+        # Simulate processing
+        time.sleep(0.1)
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Agent processing failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Example Usage
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    manager = ServiceBusManager()
+
+    # Send a message
+    manager.send_message(
+        body={
+            "user_input": "What were Q3 sales?",
+            "session_id": "session-001",
+            "user_id": "user-123",
+        },
+        session_id="session-001",
+        correlation_id="corr-001",
+    )
+
+    # Receive and process messages
+    print("Starting message receiver (Ctrl+C to stop)...")
+    try:
+        manager.receive_messages(handler=process_agent_request)
+    except KeyboardInterrupt:
+        print("\nStopped.")

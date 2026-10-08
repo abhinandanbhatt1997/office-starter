@@ -1,0 +1,9 @@
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+jobs:
+  - template: pipelines/azure-devops/templates/jobs/pr-validation-job.yml

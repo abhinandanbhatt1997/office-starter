@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Accelerator Eval Config",
+  "description": "Configuration schema for reusable AI evaluation runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eval_name",
+    "dataset_path",
+    "predictions_path",
+    "report_path"
+  ],
+  "properties": {
+    "eval_name": {
+      "type": "string",
+      "description": "Human-readable evaluation name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Owner of the evaluation."
+    },
+    "dataset_path": {
+      "type": "string",
+      "description": "Path to dataset JSONL file."
+    },
+    "predictions_path": {
+      "type": "string",
+      "description": "Path to predictions JSONL file."
+    },
+    "report_path": {
+      "type": "string",
+      "description": "Path where Markdown eval report will be written."
+    },
+    "metrics": {
+      "type": "array",
+      "description": "Metrics to calculate.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "exact_match_rate",
+          "contains_rate",
+          "success_rate",
+          "error_rate",
+          "average_latency_ms",
+          "p95_latency_ms",
+          "average_cost_usd"
+        ]
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "Thresholds for metrics. Use min or max.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          }
+        },
+        "anyOf": [
+          {
+            "required": ["min"]
+          },
+          {
+            "required": ["max"]
+          }
+        ]
+      }
+    },
+    "tags": {
+      "type": "array",
+      "description": "Optional tags.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
